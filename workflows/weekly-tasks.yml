@@ -5,11 +5,15 @@ on:
     # GitHub Actions cron kennt keine Zeitzonen (nur UTC).
     # 05:30 UTC = 07:30 Europe/Zurich waehrend Sommerzeit (CEST, Ende Maerz - Ende Okt).
     # Waehrend Winterzeit (CET, Ende Okt - Ende Maerz) laeuft es dann um 06:30 Ortszeit
-    # (1h frueher). Fuer exakte 07:30 ganzjaehrig: cron zweimal pflegen und die jeweils
-    # falsche Zeile 2x/Jahr per Kommentar deaktivieren, oder GitHub Actions Marketplace
-    # Action "tz-cron" nutzen. Fuer den Testbetrieb reicht die 1h-Drift im Winter.
+    # (1h frueher). Fuer den Testbetrieb reicht die 1h-Drift im Winter.
     - cron: "30 5 * * 1"
-  workflow_dispatch: {}   # manueller Trigger zum Testen ueber den Actions-Tab
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Nur generieren und anzeigen, NICHTS auf monday.com schreiben"
+        type: boolean
+        default: true
 
 jobs:
   create-weekly-tasks:
@@ -24,8 +28,15 @@ jobs:
       - name: Dependencies installieren
         run: pip install -r requirements.txt
 
-      - name: Wochentasks generieren und auf monday.com schreiben
+      - name: Wochentasks generieren (und ggf. auf monday.com schreiben)
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MONDAY_API_TOKEN: ${{ secrets.MONDAY_API_TOKEN }}
-        run: python generate_weekly_tasks.py
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "=== DRY RUN: es wird NICHTS auf monday.com geschrieben ==="
+            python generate_weekly_tasks.py --dry-run
+          else
+            echo "=== LIVE RUN: schreibt echte Tasks auf monday.com ==="
+            python generate_weekly_tasks.py
+          fi
