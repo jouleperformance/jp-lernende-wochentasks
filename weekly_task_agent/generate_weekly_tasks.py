@@ -4,15 +4,14 @@ Wochenaufgaben-Agent Mediamatiker (Devin & Amelia) - Joule Performance
 
 Ablauf:
 1. Liest system_prompt.md (Bildungsplan-Rotation, JP-Kontext, Ausgabeschema)
-2. Ruft die Claude API auf -> erhält 2 fertige Tasks als striktes JSON
-3. Schreibt jeden Task via monday.com GraphQL API auf das jeweilige Board
+2. Ruft die Claude API auf -> erhaelt 2 fertige Tasks als striktes JSON
+3. Erstellt je ein Item auf monday.com (create_item) mit Prioritaet/HKB/Deadline
+4. Postet die volle Aufgabenbeschreibung als Update/Kommentar auf das Item
+   (die Boards haben keine Text-Spalte fuer Beschreibungen)
 
-Benoetigte Umgebungsvariablen (als GitHub Actions Secrets oder lokal per `export`):
+Benoetigte Umgebungsvariablen:
     ANTHROPIC_API_KEY   -> https://console.anthropic.com
-    MONDAY_API_TOKEN    -> monday.com > Avatar > Admin > API (oder pro User im Profil)
-
-Board-/Spalten-IDs muessen einmalig unten in COLUMN_MAP eingetragen werden
-(siehe README.md, Abschnitt "Spalten-IDs herausfinden").
+    MONDAY_API_TOKEN    -> monday.com > Avatar > Administration > API
 """
 
 import json
@@ -25,27 +24,27 @@ from anthropic import Anthropic
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL = "claude-sonnet-4-6"
+MONDAY_API_URL = "https://api.monday.com/v2"
 
 # ---------------------------------------------------------------------------
-# 1) Board- und Spalten-Konfiguration -- einmalig pro Board ausfuellen.
-#    Spalten-IDs herausfinden: siehe README.md
+# Spalten-Konfiguration -- identisch auf beiden Boards (per API verifiziert).
 # ---------------------------------------------------------------------------
-COLUMN_MAP = {
-    "18422835984": {  # Devin
-        "description": "long_text",     # <- durch echte column id ersetzen
-        "priority": "status",           # <- durch echte column id ersetzen
-        "due_date": "date",             # <- durch echte column id ersetzen
-        "tags": "tags",                 # <- durch echte column id ersetzen (falls vorhanden)
-    },
-    "18423457412": {  # Amelia
-        "description": "long_text",
-        "priority": "status",
-        "due_date": "date",
-        "tags": "tags",
-    },
+COLUMNS = {
+    "priority": "color_mm5e5xe0",
+    "status": "status",
+    "hkb": "color_mm5egej3",
+    "due_date": "date4",
 }
 
-MONDAY_API_URL = "https://api.monday.com/v2"
+# Exakte Labels der Status-Spalten (monday.com akzeptiert NUR diese Texte)
+PRIORITY_LABELS = {
+    "tief": "Tief",
+    "mittel": "Mittel",
+    "hoch": "Hoch",
+    "kritisch": "Kritisch ⚠️️",
+}
+HKB_LABELS = {letter: f"HKB {letter.upper()}" for letter in "abcdef"}
+DEFAULT_STATUS_ON_CREATE = "In Bearbeitung"
 
 
 def load_system_prompt() -> str:
@@ -79,7 +78,6 @@ def call_claude(system_prompt: str, today: date) -> dict:
         block.text for block in response.content if block.type == "text"
     ).strip()
 
-    # Falls das Modell trotz Anweisung Codeblock-Fences liefert, entfernen:
     if raw_text.startswith("```"):
         raw_text = raw_text.strip("`")
         if raw_text.lower().startswith("json"):
@@ -91,37 +89,20 @@ def call_claude(system_prompt: str, today: date) -> dict:
         sys.exit(f"Fehler: Claude-Antwort war kein gueltiges JSON.\n{e}\n\nRohtext:\n{raw_text}")
 
 
-def create_monday_item(token: str, task: dict) -> str:
-    board_id = task["board_id"]
-    col_map = COLUMN_MAP.get(board_id, {})
+def normalize_priority(value: str) -> str:
+    key = value.strip().lower().replace(" ⚠️️", "").replace("!", "")
+    for k, label in PRIORITY_LABELS.items():
+        if key.startswith(k):
+            return label
+    return PRIORITY_LABELS["hoch"]  # sicherer Default
 
-    column_values = {}
-    if "description" in col_map:
-        column_values[col_map["description"]] = task["description"]
-    if "priority" in col_map:
-        column_values[col_map["priority"]] = {"label": task["priority"]}
-    if "due_date" in col_map:
-        column_values[col_map["due_date"]] = {"date": task["due_date"]}
-    if "tags" in col_map and task.get("tags"):
-        column_values[col_map["tags"]] = ", ".join(task["tags"])
 
-    query = """
-    mutation ($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
-      create_item (
-        board_id: $boardId,
-        item_name: $itemName,
-        column_values: $columnValues
-      ) {
-        id
-      }
-    }
-    """
-    variables = {
-        "boardId": board_id,
-        "itemName": task["title"],
-        "columnValues": json.dumps(column_values),
-    }
+def normalize_hkb(value: str) -> str:
+    letter = value.strip().lower().replace("hkb", "").replace("-", "").strip()[:1]
+    return HKB_LABELS.get(letter, HKB_LABELS["a"])
 
+
+def monday_request(token: str, query: str, variables: dict) -> dict:
     resp = requests.post(
         MONDAY_API_URL,
         json={"query": query, "variables": variables},
@@ -131,8 +112,62 @@ def create_monday_item(token: str, task: dict) -> str:
     resp.raise_for_status()
     data = resp.json()
     if "errors" in data:
-        raise RuntimeError(f"monday.com API-Fehler fuer {task['person']}: {data['errors']}")
-    return data["data"]["create_item"]["id"]
+        raise RuntimeError(f"monday.com API-Fehler: {data['errors']}")
+    return data["data"]
+
+
+CREATE_ITEM_QUERY = """
+mutation ($boardId: ID!, $itemName: String!, $columnValues: JSON!) {
+  create_item (
+    board_id: $boardId,
+    item_name: $itemName,
+    column_values: $columnValues
+  ) {
+    id
+  }
+}
+"""
+
+CREATE_UPDATE_QUERY = """
+mutation ($itemId: ID!, $body: String!) {
+  create_update (item_id: $itemId, body: $body) {
+    id
+  }
+}
+"""
+
+
+def create_monday_task(token: str, task: dict) -> tuple[str, str]:
+    column_values = {
+        COLUMNS["priority"]: {"label": normalize_priority(task["priority"])},
+        COLUMNS["hkb"]: {"label": normalize_hkb(task["hkb"])},
+        COLUMNS["status"]: {"label": DEFAULT_STATUS_ON_CREATE},
+        COLUMNS["due_date"]: {"date": task["due_date"]},
+    }
+
+    item_data = monday_request(
+        token,
+        CREATE_ITEM_QUERY,
+        {
+            "boardId": task["board_id"],
+            "itemName": task["title"],
+            "columnValues": json.dumps(column_values),
+        },
+    )
+    item_id = item_data["create_item"]["id"]
+
+    update_body = task["description"]
+    if task.get("links"):
+        update_body += "\n\nVerlinkungen/Dokumente:\n" + "\n".join(
+            f"- {link}" for link in task["links"]
+        )
+
+    update_data = monday_request(
+        token, CREATE_UPDATE_QUERY, {"itemId": item_id, "body": update_body}
+    )
+    update_id = update_data["create_update"]["id"]
+
+    return item_id, update_id
 
 
 def main():
@@ -150,21 +185,26 @@ def main():
     for t in tasks:
         print(f"\n--- {t['person']} ---")
         print(f"Titel: {t['title']}")
-        print(f"Faelligkeit: {t['due_date']}  |  Prioritaet: {t['priority']}  |  Tags: {t.get('tags')}")
-        print(f"Beschreibung:\n{t['description']}\n")
+        print(
+            f"Faelligkeit: {t['due_date']}  |  Prioritaet: {normalize_priority(t['priority'])}"
+            f"  |  HKB: {normalize_hkb(t['hkb'])}  |  Status: {DEFAULT_STATUS_ON_CREATE}"
+        )
+        print(f"Beschreibung (wird als Update gepostet):\n{t['description']}")
+        if t.get("links"):
+            print("Links: " + ", ".join(t["links"]))
 
     if dry_run:
-        print("[dry-run] Kein Schreibzugriff auf monday.com ausgefuehrt.")
+        print("\n[dry-run] Kein Schreibzugriff auf monday.com ausgefuehrt.")
         return
 
     token = os.environ.get("MONDAY_API_TOKEN")
     if not token:
         sys.exit("Fehler: MONDAY_API_TOKEN ist nicht gesetzt.")
 
-    print("[2/3] Schreibe Tasks auf monday.com ...")
+    print("\n[2/3] Schreibe Tasks auf monday.com ...")
     for t in tasks:
-        item_id = create_monday_item(token, t)
-        print(f"  -> {t['person']}: Item {item_id} auf Board {t['board_id']} erstellt.")
+        item_id, update_id = create_monday_task(token, t)
+        print(f"  -> {t['person']}: Item {item_id} (Update {update_id}) auf Board {t['board_id']} erstellt.")
 
     print("[3/3] Fertig.")
 
