@@ -34,6 +34,15 @@ COLUMNS = {
     "status": "status",
     "hkb": "color_mm5egej3",
     "due_date": "date4",
+    "ansprechperson": "person",                 # Pflichtfeld auf beiden Boards
+    "assignee": "multiple_person_mm5bmx0z",      # Spalte "Devin" bzw. "Amelia"
+}
+
+# monday.com User-IDs (via `query { users { id name email } }` ermittelt)
+MARKUS_USER_ID = 104611755  # Praxisbildner, Ansprechperson auf beiden Boards
+PERSON_IDS = {
+    "Devin": 65052525,
+    "Amelia": 112589393,
 }
 
 # Exakte Labels der Status-Spalten (monday.com akzeptiert NUR diese Texte)
@@ -138,12 +147,21 @@ mutation ($itemId: ID!, $body: String!) {
 
 
 def create_monday_task(token: str, task: dict) -> tuple[str, str]:
+    person_id = PERSON_IDS.get(task["person"])
+
     column_values = {
         COLUMNS["priority"]: {"label": normalize_priority(task["priority"])},
         COLUMNS["hkb"]: {"label": normalize_hkb(task["hkb"])},
         COLUMNS["status"]: {"label": DEFAULT_STATUS_ON_CREATE},
         COLUMNS["due_date"]: {"date": task["due_date"]},
+        COLUMNS["ansprechperson"]: {
+            "personsAndTeams": [{"id": MARKUS_USER_ID, "kind": "person"}]
+        },
     }
+    if person_id:
+        column_values[COLUMNS["assignee"]] = {
+            "personsAndTeams": [{"id": person_id, "kind": "person"}]
+        }
 
     item_data = monday_request(
         token,
