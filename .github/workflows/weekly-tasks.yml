@@ -1,0 +1,42 @@
+name: Wochenaufgaben Mediamatiker
+
+on:
+  schedule:
+    # GitHub Actions cron kennt keine Zeitzonen (nur UTC).
+    # 05:30 UTC = 07:30 Europe/Zurich waehrend Sommerzeit (CEST, Ende Maerz - Ende Okt).
+    # Waehrend Winterzeit (CET, Ende Okt - Ende Maerz) laeuft es dann um 06:30 Ortszeit
+    # (1h frueher). Fuer den Testbetrieb reicht die 1h-Drift im Winter.
+    - cron: "30 5 * * 1"
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Nur generieren und anzeigen, NICHTS auf monday.com schreiben"
+        type: boolean
+        default: true
+
+jobs:
+  create-weekly-tasks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependencies installieren
+        run: pip install -r requirements.txt
+
+      - name: Wochentasks generieren (und ggf. auf monday.com schreiben)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MONDAY_API_TOKEN: ${{ secrets.MONDAY_API_TOKEN }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "=== DRY RUN: es wird NICHTS auf monday.com geschrieben ==="
+            python generate_weekly_tasks.py --dry-run
+          else
+            echo "=== LIVE RUN: schreibt echte Tasks auf monday.com ==="
+            python generate_weekly_tasks.py
+          fi
