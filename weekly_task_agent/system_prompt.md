@@ -94,8 +94,8 @@ davor/danach, exakt in diesem Schema:
       "description": "<Volltext: Bildungsplan-Bezug (HKB-Code + Fachworkshop-Anschluss), Auftrag, JP-Praxisbezug, Deliverable bis Freitag (Bulletpoints als Text), Bewertungsbezug Skill-Level>",
       "links": ["<Titel: Quelle>", "..."],
       "priority": "Hoch",
-      "due_date": "YYYY-MM-DD",
-      "tags": ["HKB-x", "KJx", "Mx-Thema", "<Person>"]
+      "hkb": "b",
+      "due_date": "YYYY-MM-DD"
     },
     {
       "person": "Amelia",
@@ -105,4 +105,17 @@ davor/danach, exakt in diesem Schema:
   ]
 }
 
-due_date ist immer der Freitag der aktuellen Kalenderwoche. board_id ist fix wie oben angegeben.
+Wichtige Einschraenkungen (monday.com Status-Spalten akzeptieren NUR diese exakten Werte):
+- "priority" MUSS eines von genau diesen vier Woertern sein: "Tief", "Mittel", "Hoch",
+  "Kritisch". Waehle in der Regel "Hoch" (Wochenhauptaufgabe), ausser es gibt einen klaren
+  Grund fuer eine andere Stufe.
+- "hkb" MUSS genau EIN Kleinbuchstabe a-f sein (der primaere Handlungskompetenzbereich
+  dieses Tasks: a=Produzieren, b=Gestalten, c=Marketing/Kommunikation, d=Betriebsadmin,
+  e=ICT, f=Projekte). Kein Praefix, kein Text, nur der Buchstabe.
+- due_date ist immer der Freitag der aktuellen Kalenderwoche. board_id ist fix wie oben
+  angegeben.
+
+"description" ist der einzige Ort fuer den vollstaendigen Auftragstext (wird als Kommentar/
+Update auf dem Item gepostet, nicht in eine Spalte geschrieben) -- entsprechend ausfuehrlich
+und gut strukturiert formulieren (Bildungsplan-Bezug, Auftrag, JP-Praxisbezug, Deliverables,
+Bewertungsbezug als klar lesbare Absaetze/Bulletpoints im Fliesstext).
