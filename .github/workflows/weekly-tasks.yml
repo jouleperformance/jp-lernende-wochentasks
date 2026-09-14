@@ -18,6 +18,11 @@ on:
 jobs:
   create-weekly-tasks:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Alle "run:"-Schritte unten werden in diesem Unterordner ausgefuehrt,
+        # da dort generate_weekly_tasks.py, system_prompt.md und requirements.txt liegen.
+        working-directory: weekly_task_agent
     steps:
       - uses: actions/checkout@v4
 
