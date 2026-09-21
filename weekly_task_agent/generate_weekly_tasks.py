@@ -39,7 +39,12 @@ COLUMNS = {
     "status": "status",
     "hkb": "color_mm5egej3",
     "due_date": "date4",
+    "ansprechperson": "person",
+    "zustaendig": "multiple_person_mm5bmx0z",
 }
+
+MARKUS_USER_ID = 104611755  # Pflichtfeld "Ansprechperson" auf beiden Boards
+PERSON_IDS = {"Devin": 65052525, "Amelia": 112589393}
 
 PRIORITY_LABELS = {
     "tief": "Tief",
@@ -189,7 +194,11 @@ def create_monday_task(token: str, task: dict) -> tuple[str, str]:
         COLUMNS["hkb"]: {"label": normalize_hkb(task["hkb"])},
         COLUMNS["status"]: {"label": DEFAULT_STATUS_ON_CREATE},
         COLUMNS["due_date"]: {"date": task["due_date"]},
+        COLUMNS["ansprechperson"]: {"personsAndTeams": [{"id": MARKUS_USER_ID, "kind": "person"}]},
     }
+    person_id = PERSON_IDS.get(task["person"])
+    if person_id:
+        column_values[COLUMNS["zustaendig"]] = {"personsAndTeams": [{"id": person_id, "kind": "person"}]}
 
     item_data = monday_request(
         token,
