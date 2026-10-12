@@ -29,7 +29,9 @@ MODEL = "claude-sonnet-4-6"
 MONDAY_API_URL = "https://api.monday.com/v2"
 
 BOARD_IDS = ["18422835984", "18423457412"]  # Devin, Amelia
-RECENT_ITEMS_LIMIT = 10  # pro Board, fuer die Duplikat-Pruefung
+RECENT_ITEMS_LIMIT = 8   # pro Board: letzte N vom Agenten erstellte Tasks (Duplikat-Pruefung)
+BOARD_PERSON = {"18422835984": "Devin", "18423457412": "Amelia"}
+AGENT_TITLE_PREFIX = "KW"  # Agent-Tasks heissen "KW42 · ..." -- manuelle Tasks werden ignoriert
 
 # ---------------------------------------------------------------------------
 # Spalten-Konfiguration -- identisch auf beiden Boards (per API verifiziert).
@@ -76,9 +78,15 @@ def monday_request(token: str, query: str, variables: dict) -> dict:
 
 
 RECENT_ITEMS_QUERY = """
-query ($boardId: ID!, $limit: Int!) {
+query ($boardId: ID!, $limit: Int!, $prefix: CompareValue!) {
   boards (ids: [$boardId]) {
-    items_page (limit: $limit) {
+    items_page (
+      limit: $limit,
+      query_params: {
+        rules: [{column_id: "name", compare_value: $prefix, operator: starts_with}],
+        order_by: [{column_id: "__creation_log__", direction: desc}]
+      }
+    ) {
       items {
         name
       }
@@ -89,13 +97,15 @@ query ($boardId: ID!, $limit: Int!) {
 
 
 def fetch_recent_task_titles(token: str) -> dict[str, list[str]]:
-    """Holt die zuletzt vergebenen Aufgabentitel je Board -- Grundlage fuer
-    die Duplikat-Vermeidung. Reihenfolge ist neueste-zuerst (monday.com
-    Default-Sortierung)."""
+    """Holt je Board die zuletzt vom Agenten erstellten Aufgabentitel (Prefix 'KW'),
+    sortiert nach Erstellungsdatum, unabhaengig von der Gruppe. Wichtig: Fertige
+    Tasks werden oft ins 'Archiv' verschoben -- ein Default-items_page haette sie
+    nie geliefert (Board-Reihenfolge statt Datum), wodurch Duplikate entstanden."""
     titles_by_board = {}
     for board_id in BOARD_IDS:
         data = monday_request(
-            token, RECENT_ITEMS_QUERY, {"boardId": board_id, "limit": RECENT_ITEMS_LIMIT}
+            token, RECENT_ITEMS_QUERY,
+            {"boardId": board_id, "limit": RECENT_ITEMS_LIMIT, "prefix": [AGENT_TITLE_PREFIX]},
         )
         boards = data.get("boards", [])
         items = boards[0]["items_page"]["items"] if boards else []
@@ -112,14 +122,14 @@ def call_claude(system_prompt: str, today: date, recent_titles: dict[str, list[s
     friday = today + timedelta(days=(4 - today.weekday()) % 7)
     kw = today.isocalendar().week
 
-    all_recent = recent_titles.get("18422835984", []) + recent_titles.get("18423457412", [])
+    history_lines = []
+    for board_id, person in BOARD_PERSON.items():
+        titles = recent_titles.get(board_id, [])
+        history_lines.append(f"{person} (neueste zuerst):")
+        history_lines.extend(f"  - {t}" for t in titles) if titles else history_lines.append("  - (noch keine)")
     recent_block = (
-        "BEREITS VERGEBENE AUFGABEN DER LETZTEN WOCHEN (nicht wiederholen, auch nicht "
-        "thematisch/inhaltlich sehr aehnlich -- waehle ein klar unterschiedliches Thema "
-        "innerhalb des passenden Rotationsmoduls):\n"
-        + "\n".join(f"- {t}" for t in all_recent)
-        if all_recent
-        else "BEREITS VERGEBENE AUFGABEN: keine (erster Lauf oder Boards leer)."
+        "BEREITS VERGEBENE AUFGABEN JE PERSON (nicht wiederholen, auch nicht thematisch "
+        "sehr aehnlich):\n" + "\n".join(history_lines)
     )
 
     user_message = (
@@ -127,9 +137,11 @@ def call_claude(system_prompt: str, today: date, recent_titles: dict[str, list[s
         f"Faelligkeitsdatum fuer beide Tasks: {friday.isoformat()} (Freitag dieser Woche).\n\n"
         f"{recent_block}\n\n"
         "Generiere jetzt die zwei Wochentasks fuer Devin und Amelia gemaess Schema. "
-        "Waehle bewusst ein neues Thema, das sich klar von der obigen Liste unterscheidet, "
-        "auch wenn beide Themen technisch im selben Rotationsmodul liegen -- variiere "
-        "Aufgabentyp, Zielsetzung oder Blickwinkel."
+        "Pruefe je Person die obige Historie: Das Rotationsmodul darf mehrere Wochen laufen, "
+        "aber jede neue Aufgabe muss eine NEUE Teilkompetenz oder einen neuen Aufgabentyp "
+        "abdecken (z.B. nicht schon wieder Typografie, wenn die letzten Wochen Typografie "
+        "waren) und auf den bisherigen aufbauen, statt sie zu wiederholen. Beide Aufgaben "
+        "sollen sich zudem untereinander klar unterscheiden."
     )
 
     response = client.messages.create(
